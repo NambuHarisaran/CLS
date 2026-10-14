@@ -1,0 +1,126 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function role() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        role() == 'admin' ||
+        (request.auth.token.email == 'nambuharisaran123@gmail.com' &&
+         request.auth.token.email_verified == true)
+      );
+    }
+
+    function isStaff() {
+      return isSignedIn() && (role() == 'admin' || role() == 'cashier');
+    }
+
+    // users collection
+    match /users/{uid} {
+      // Read own doc always; admins can read any
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        isAdmin()
+      );
+      // New user creating their own doc on first sign-in.
+      // Use token claims only (no get() call) so this works before the doc exists.
+      allow create: if isSignedIn() && request.auth.uid == uid &&
+        (
+          (
+            request.resource.data.role == 'customer' &&
+            request.auth.token.email != 'nambuharisaran123@gmail.com'
+          ) ||
+          (
+            request.resource.data.role == 'admin' &&
+            request.auth.token.email == 'nambuharisaran123@gmail.com' &&
+            request.auth.token.email_verified == true
+          )
+        );
+      // Update: admin can change anything; user can update own doc but not role
+      allow update: if (
+          request.auth.token.email == 'nambuharisaran123@gmail.com' &&
+          request.auth.token.email_verified == true
+        ) ||
+        (
+          isSignedIn() && request.auth.uid == uid &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
+        ) ||
+        isAdmin();
+    }
+
+    // products
+    match /products/{barcode} {
+      allow read: if isSignedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isStaff();
+    }
+
+    // customers
+    match /customers/{phone} {
+      allow read, write: if isStaff();
+      allow read: if isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone == phone;
+      allow update: if isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone == phone &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'optInOffers']);
+    }
+
+    // bills
+    match /bills/{billId} {
+      allow create: if isStaff();
+      allow read: if isStaff() ||
+        (
+          isSignedIn() &&
+          resource.data.customerPhone == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone
+        );
+      allow update, delete: if isAdmin();
+    }
+
+    // visits
+    match /visits/{visitId} {
+      allow create: if isStaff();
+      allow read: if isStaff() ||
+        (
+          isSignedIn() &&
+          resource.data.customerPhone == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone
+        );
+      allow update, delete: if isAdmin();
+    }
+
+    // coupons
+    match /coupons/{code} {
+      allow read: if isSignedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() ||
+        (
+          isStaff() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount'])
+        );
+    }
+
+    // offers
+    match /offers/{offerId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // settings
+    match /settings/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // counters
+    match /counters/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+  }
+}
